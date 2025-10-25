@@ -1,0 +1,5 @@
+# Ignore all "_backups" folders everywhere
+**/_backups/
+
+# Globals
+*.bck

@@ -1,0 +1,17 @@
+DevHelper
+Copyright (c) 2025-present Aserno ApS
+Licensed under the GNU General Public License v3.0 (GPL-3.0) - see LICENSE.
+
+DevHelper is a standalone browser-based developer utility for cleaning
+and formatting source code (HTML, LiteView, PHP, JavaScript, CSS, JSON).
+
+This project is maintained by Aserno ApS and released as open-source
+software to support better developer ergonomics and workflow quality.
+
+------------------------------------------------------------
+Trademarks
+------------------------------------------------------------
+"Aserno" and the Aserno logo are trademarks of Aserno ApS.
+Use of these marks is subject to Aserno's branding and identity policy.
+This open-source project is independent and may not imply endorsement
+or official partnership unless explicitly stated.
