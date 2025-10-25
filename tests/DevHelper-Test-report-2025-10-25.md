@@ -47,7 +47,7 @@ We used a two-layer approach:
 
 1. **Automated harness** (single self-contained spec):
 
-   * Location: **`[tests/devhelper-harness.spec.js](https://github.com/asernohq/devhelper/blob/main/tests/devhelper-harness.spec.js)`**.
+   * Location: [tests/devhelper-harness.spec.js](https://github.com/asernohq/devhelper/blob/main/tests/devhelper-harness.spec.js).
    * Runs a **black-box** suite against the exported/global functions.
    * Mix of **exact equality** and **predicate** checks (robust regex/substring assertions) to avoid false negatives from trivial whitespace variance.
    * Final summary is printed to the console (pass/fail list and diff excerpt on mismatch).
@@ -158,7 +158,7 @@ DevHelper's utilities behave **correctly and deterministically** across the targ
 
 * **Where the harness lives**
 
-  * `**[tests/devhelper-harness.spec.js](https://github.com/asernohq/devhelper/blob/main/tests/devhelper-harness.spec.js)**`
+  * [tests/devhelper-harness.spec.js](https://github.com/asernohq/devhelper/blob/main/tests/devhelper-harness.spec.js)
 
 * **How to use it (in-browser):**
 
