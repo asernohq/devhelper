@@ -173,12 +173,13 @@ Accessibility & UX:
 				<label for="action">Choose action:</label>
 				<select id="action" aria-label="Choose action">
 					<option value="strip-docs">1: Remove documentation</option>
-					<option value="fix-forbidden">2: Replace forbidden characters</option>
-					<option value="indent-code">3: Indent code (JS/PHP/C)</option>
-					<option value="indent-liteview">4: Indent LiteView</option>
-					<option value="indent-html">5: Indent HTML</option>
-					<option value="prettify-json">6: Prettify JSON</option>
-					<option value="prettify-css">7: Prettify CSS</option>
+					<option value="sql-cleanup">2: SQL cleanup (phpMyAdmin dump)</option>
+					<option value="fix-forbidden">3: Replace forbidden characters</option>
+					<option value="indent-code">4: Indent code (JS/PHP/C)</option>
+					<option value="indent-liteview">5: Indent LiteView</option>
+					<option value="indent-html">6: Indent HTML</option>
+					<option value="prettify-json">7: Prettify JSON</option>
+					<option value="prettify-css">8: Prettify CSS</option>
 				</select>
 				<button id="goBtn" type="button">Go</button>
 				<button id="copyBtn" type="button" title="Copy output to clipboard">Copy</button>
@@ -236,6 +237,8 @@ Accessibility & UX:
 			// Map select value -> formatter function
 			if (action === 'strip-docs') {
 				result = stripComments(text);
+			} else if (action === 'sql-cleanup') {
+				result = sqlCleanup(text);
 			} else if (action === 'fix-forbidden') {
 				result = replaceForbidden(text);
 			} else if (action === 'indent-code') {
@@ -505,6 +508,47 @@ Accessibility & UX:
 			out = out.replace(/^\s*\n/, '').replace(/\s+$/g, '') + '\n';
 			return out;
 		}
+		
+		
+		/**
+		 * sqlCleanup
+		 *
+		 * Cleanup for phpMyAdmin/MySQL dumps.
+		 *
+		 * Removes:
+		 * - "-- ..." comment lines (after optional indentation)
+		 * - MySQL versioned comments: (also removes a trailing ';' if present)
+		 * - Trailing spaces
+		 * - Collapses excessive blank lines
+		 *
+		 * Always ends with a newline.
+		 *
+		 * @param {string} src SQL dump text.
+		 * @return {string} Cleaned SQL.
+		 */
+		function sqlCleanup(src) {
+			// Normalize newlines to LF
+			let s = (src || '').replace(/\r\n?/g, '\n');
+
+			// 1) Remove "-- ..." full-line comments (keep non-comment SQL intact)
+			s = s.replace(/^[ \t]*--.*(?:\n|$)/gm, '');
+
+			// 2) Remove MySQL versioned comments: /*! ... */
+			//    Also remove an optional trailing semicolon right after the comment.
+			//    Example: /*!40101 SET NAMES utf8mb4 */;
+			s = s.replace(/\/\*!\d{5}[\s\S]*?\*\/\s*;?/g, '');
+
+			// 3) Trim trailing spaces
+			s = s.replace(/[ \t]+\n/g, '\n');
+
+			// 4) Collapse 3+ newlines to max 2 (keeps one blank line between blocks)
+			s = s.replace(/\n{3,}/g, '\n\n');
+
+			// 5) Trim leading/trailing blank lines, ensure final newline
+			s = s.replace(/^\s*\n/, '').replace(/\s+$/g, '') + '\n';
+
+			return s;
+		}		
 
 
 		/**
@@ -1344,66 +1388,139 @@ Accessibility & UX:
 		 *
 		 * Designed for heuristic formatting; does not evaluate Twig expressions.
 		 */
-		function indentLiteView(src) {
-			// Placeholder protects inline "{% else %}<tag>" from being split in the wrong spot
-			const ELSE_PLACEHOLDER = '__ELSE_INLINE__';
+function indentLiteView(src) {
+	const ELSE_PLACEHOLDER = '__ELSE_INLINE__';
 
-			// Normalize newlines first
-			let pre = src.replace(/\r\n?/g, '\n');
+	let pre = src.replace(/\r\n?/g, '\n');
+	pre = pre.replace(/^\s*\{\%\s*else\s*\%\}\s*(?=<)/gm, `{% else %}${ELSE_PLACEHOLDER}`);
 
-			// Protect "{% else %}<...>" only when the directive begins the line (optional whitespace allowed)
-			pre = pre.replace(/^\s*\{\%\s*else\s*\%\}\s*(?=<)/gm, `{% else %}${ELSE_PLACEHOLDER}`);
+	// Inline tags = må gerne stå kompakt
+	const inlineTags = [
+		'strong','em','b','i','u','span','a','small','label','br','img',
+		'input','meta','link','hr','source','track'
+	];
+	const isInline = (name) => inlineTags.includes(name);
 
-			// Split tags and directives across lines, but DON'T split between "%}" and "{% else/elseif %}"
-			pre = pre
-				.replace(/>(\s*)</g, (m, ws) => ws.includes('\n\n') ? '>\n\n<' : '>\n<')
-				.replace(/%}\s*(?=\{%\s*(?!else\b|elseif\b))/g, '%}\n')
-				.replace(/>\s*(?=\{%)/g, '>\n')
-				.replace(/%}\s*(?=<)/g, '%}\n');
+	// Særlige "container" blokke der altid bør bryde efter åbning (på nær <li>)
+	const forceBreakAfterOpen = new Set([
+		'div','nav','header','section','article','main','footer','ul','ol','dl',
+		'table','thead','tbody','tfoot','tr','td','th','p','h1','h2','h3','h4','h5','h6'
+	]);
 
-			// Restore the placeholder to nothing
-			pre = pre.replace(new RegExp(ELSE_PLACEHOLDER, 'g'), '');
+	function smartSplitTags(text) {
+		return text.replace(/>(\s*)</g, (m, ws, offset, str) => {
+			if (ws.includes('\n\n')) return '>\n\n<';
 
-			const lines = pre.split('\n');
-			const tab = '\t';
-			let depth = 0;
-			const out = [];
+			// venstre tag
+			const lStart = str.lastIndexOf('<', offset);
+			if (lStart === -1) return m;
+			const lFrag = str.slice(lStart, offset);
+			const lM = lFrag.match(/^<\s*(\/)?\s*([A-Za-z0-9:-]+)/);
+			if (!lM) return m;
+			const lClose = !!lM[1];
+			const lName  = (lM[2] || '').toLowerCase();
 
-			// Inline/void tags do not influence indentation depth
-			const inlineTags = [
-				'strong','em','b','i','u','span','a','small','label','br','img',
-				'input','meta','link','hr','source','track'
-			];
+			// højre tag
+			const rLt = offset + 1 + ws.length;
+			const rGt = str.indexOf('>', rLt + 1);
+			if (rGt === -1) return m;
+			const rFrag = str.slice(rLt, rGt + 1);
+			const rM = rFrag.match(/^<\s*(\/)?\s*([A-Za-z0-9:-]+)/);
+			if (!rM) return m;
+			const rClose = !!rM[1];
+			const rName  = (rM[2] || '').toLowerCase();
 
-			// Regexes for directive classes
-			const openDirective  = /^\s*\{%\s*(block|if|for|foreach|while)\b/;
-			const closeDirective = /^\s*\{%\s*end(block|if|for|foreach|while)\b/;
+			const inline = new Set(['strong','em','b','i','u','span','a','small','label','br','img','input','meta','link','hr','source','track']);
+			const lInline = inline.has(lName);
+			const rInline = inline.has(rName);
 
-			for (const raw of lines) {
-				const line = raw.trim();
-				if (line === '') { out.push(''); continue; }
-
-				// Count non-inline HTML tags on this line
-				const openTags = (line.match(/<([a-zA-Z0-9:-]+)(?![^>]*\/>)(?=[^>]*>)/g) || [])
-					.map(t => t.replace(/[<\/>]/g, '').toLowerCase())
-					.filter(t => !inlineTags.includes(t));
-				const closeTags = (line.match(/<\/([a-zA-Z0-9:-]+)>/g) || [])
-					.map(t => t.replace(/[<\/>]/g, '').toLowerCase())
-					.filter(t => !inlineTags.includes(t));
-
-				// Dedent before printing if the line starts with a closing directive or closing HTML tag
-				const leadingCloseDir  = closeDirective.test(line);
-				const leadingCloseHtml = /^\s*<\/[a-zA-Z0-9:-]+>/.test(line);
-				if (leadingCloseDir || leadingCloseHtml) depth = Math.max(0, depth - 1);
-
-				out.push(tab.repeat(depth) + line);
-
-				// After printing: bump depth for opening directive or net more opens than closes
-				if (openDirective.test(line) || openTags.length > closeTags.length) depth += 1;
+			// 1) inline-close før block-close: bryd, MEN behold kompakt hvis højre er </li>
+			//    (</a></li> og </span></li> skal være på samme linje; </span></div> skal brydes)
+			if (lClose && lInline && rClose && !rInline) {
+				return (rName === 'li') ? '><' : '>\n<';
 			}
 
-			return out.join('\n');
+			// 2) Særregel: bryd mellem søskende anchor-tags (knapper i nav)
+			//    </a><a ...> -> ny linje
+			if (lClose && lName === 'a' && !rClose && rName === 'a') {
+				return '>\n<';
+			}
+
+			// 3) inline↔inline beholdes kompakt (fx </i><strong>, <a><i>…</i></a>)
+			if (lInline && rInline) return '><';
+
+			// 4) <li><inline>… kompakt
+			if (!lClose && lName === 'li' && !rClose && rInline) return '><';
+
+			// 5) Hvis mindst én side er block: bryd
+			if (!lInline || !rInline) return '>\n<';
+
+			// 6) Fallback: kompakt
+			return '><';
+		});
+	}
+
+
+	pre = smartSplitTags(pre)
+		.replace(/%}\s*(?=\{%\s*(?!else\b|elseif\b))/g, '%}\n')
+		.replace(/>\s*(?=\{%)/g, '>\n')
+		.replace(/%}\s*(?=<)/g, '%}\n');
+
+	pre = pre.replace(new RegExp(ELSE_PLACEHOLDER, 'g'), '');
+
+	const lines = pre.split('\n');
+	const tab = '\t';
+	let depth = 0;
+	const out = [];
+
+	const openDirective  = /^\s*\{%\s*(block|if|for|foreach|while)\b/;
+	const closeDirective = /^\s*\{%\s*end(block|if|for|foreach|while)\b/;
+
+	for (const raw of lines) {
+		const line = raw.trim();
+		if (line === '') { out.push(''); continue; }
+
+		const openTags = (line.match(/<([A-Za-z0-9:-]+)(?![^>]*\/>)(?=[^>]*>)/g) || [])
+			.map(t => t.replace(/[<\/>]/g, '').toLowerCase())
+			.filter(t => !inlineTags.includes(t));
+		const closeTags = (line.match(/<\/([A-Za-z0-9:-]+)>/g) || [])
+			.map(t => t.replace(/[<\/>]/g, '').toLowerCase())
+			.filter(t => !inlineTags.includes(t));
+
+		// Tæl ALLE ledende closing non-inline tags for korrekt dedent
+		let leadingCloseCount = 0;
+		{
+			const lead = line.match(/^(\s*(<\/[A-Za-z0-9:-]+>)+)/);
+			if (lead) {
+				const all = (lead[0].match(/<\/([A-Za-z0-9:-]+)>/g) || [])
+					.map(x => x.replace(/[<\/>]/g, '').toLowerCase())
+					.filter(t => !inlineTags.includes(t));
+				leadingCloseCount = all.length;
+			}
 		}
+		if (closeDirective.test(line)) leadingCloseCount = Math.max(leadingCloseCount, 1);
+
+		if (leadingCloseCount > 0) depth = Math.max(0, depth - leadingCloseCount);
+
+		out.push(tab.repeat(depth) + line);
+
+		// Efter print: juster dybde
+		if (openDirective.test(line)) {
+			depth += 1;
+			continue;
+		}
+
+		const netCloseAfter = Math.max(0, closeTags.length - openTags.length - leadingCloseCount);
+		if (netCloseAfter > 0) depth = Math.max(0, depth - netCloseAfter);
+		else if (openTags.length > closeTags.length) depth += (openTags.length - closeTags.length);
+	}
+
+	return out.join('\n');
+}
+
+
+
+
 		
 
 		/**
